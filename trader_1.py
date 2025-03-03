@@ -149,6 +149,7 @@ class TradingBot:
     def run_backtest(self, df):
         df = self.strategy.apply_strategy(df)
         print(f"Initial Balance: ${self.balance:.2f}")
+        print(f"Strategy: {self.strategy.__class__.__name__}")
         print(f"Base asset: {self.base_asset}\n")
 
         for i in range(1, len(df)):
@@ -178,7 +179,7 @@ class TradingBot:
         final_balance = self.balance + (self.position * df['close'].iloc[-1])
         print(f"\nTotal Trades Executed: {self.trades}")
         print(f"Final Balance after backtest: ${final_balance:.2f}")
-        # df.to_csv("data.csv", index=False)
+        df.to_csv("data.csv", index=False)
         return final_balance
 
 
@@ -187,6 +188,6 @@ if __name__ == "__main__":
     pair = "BTCUSDT"
     fetcher = BinanceDataFetcher(symbol=pair, days=365)
     df = fetcher.fetch_data()
-    strategy = RSIStrategy()
+    strategy = EMACrossoverStrategy()
     bot = TradingBot(strategy, symbol=pair)
     bot.run_backtest(df)
