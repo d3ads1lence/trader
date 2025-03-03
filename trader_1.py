@@ -6,7 +6,7 @@ import time
 import ta
 
 class BinanceDataFetcher:
-    def __init__(self, symbol="BTCUSDT", interval="1h", days=365, filename="historical_data.csv"):
+    def __init__(self, symbol="BTCUSDT", interval="1d", days=365, filename="historical_data.csv"):
         self.base_url = "https://api.binance.com/api/v3/klines"
         self.symbol = symbol
         self.interval = interval
@@ -64,7 +64,7 @@ class EMACrossoverStrategy:
         return df
 
 class RSIStrategy:
-    def __init__(self, rsi_period=14, overbought=70, oversold=30):
+    def __init__(self, rsi_period=6, overbought=70, oversold=30):
         self.rsi_period = rsi_period
         self.overbought = overbought
         self.oversold = oversold
@@ -154,7 +154,7 @@ class TradingBot:
         for i in range(1, len(df)):
             price = df['close'].iloc[i]
             
-            if df['Trade_Signal'].iloc[i] == 2 and self.first_trade:  # First trade must be a BUY
+            if df['Trade_Signal'].iloc[i] == 1 and self.first_trade:  # First trade must be a BUY
                 self.position = self.balance / price  # Buy all with available balance
                 self.balance = 0
                 self.first_trade = False
@@ -162,14 +162,14 @@ class TradingBot:
                 self.buy_price = price  # Store buy price
                 print(f"BUY at {price:.2f}, Amount: {self.position:.6f} {self.base_asset}")
 
-            elif df['Trade_Signal'].iloc[i] == 2 and self.balance > 0:  # Buy only if we have cash
+            elif df['Trade_Signal'].iloc[i] == 1 and self.balance > 0:  # Buy only if we have cash
                 self.position = self.balance / price
                 self.balance = 0
                 self.trades += 1
                 self.buy_price = price  # Store buy price
                 print(f"BUY at {price:.2f}, Amount: {self.position:.6f} {self.base_asset}")
 
-            elif df['Trade_Signal'].iloc[i] == -2 and self.position > 0 and price > self.buy_price:  # Sell only if we hold crypto
+            elif df['Trade_Signal'].iloc[i] == -1 and self.position > 0 and price > self.buy_price:  # Sell only if we hold crypto
                 self.balance = self.position * price
                 print(f"SELL at {price:.2f}, Amount: {self.position:.6f} {self.base_asset}, Balance: {self.balance}")
                 self.position = 0
@@ -178,6 +178,7 @@ class TradingBot:
         final_balance = self.balance + (self.position * df['close'].iloc[-1])
         print(f"\nTotal Trades Executed: {self.trades}")
         print(f"Final Balance after backtest: ${final_balance:.2f}")
+        # df.to_csv("data.csv", index=False)
         return final_balance
 
 
