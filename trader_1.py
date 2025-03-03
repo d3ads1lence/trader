@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import numpy as np
 import time
+import ta
 
 class BinanceDataFetcher:
     def __init__(self, symbol="BTCUSDT", interval="1h", days=365, filename="historical_data.csv"):
@@ -13,7 +14,6 @@ class BinanceDataFetcher:
         self.filename = filename
     
     def fetch_data(self):
-        # Check if the historical data file exists
         if os.path.exists(self.filename):
             print("Loading data from file...")
             df = pd.read_csv(self.filename)
@@ -39,15 +39,13 @@ class BinanceDataFetcher:
                     break
                 
                 all_data.extend(data)
-                start_time = data[-1][0] + 1  # Move start time forward
-                time.sleep(0.5)  # Prevent rate limiting
+                start_time = data[-1][0] + 1  
+                time.sleep(0.5)  
             
             df = pd.DataFrame(all_data, columns=["timestamp", "open", "high", "low", "close", "volume", 
                                                  "close_time", "quote_asset_volume", "num_trades", 
                                                  "taker_buy_base", "taker_buy_quote", "ignore"])
             df = df[["timestamp", "open", "high", "low", "close", "volume"]].astype(float)
-            
-            # Save data to file
             df.to_csv(self.filename, index=False)
             print("Data saved to file.")
         
@@ -59,8 +57,8 @@ class EMACrossoverStrategy:
         self.long_window = long_window
         
     def apply_strategy(self, df):
-        df['EMA9'] = df['close'].ewm(span=self.short_window, adjust=False).mean()
-        df['EMA21'] = df['close'].ewm(span=self.long_window, adjust=False).mean()
+        df['EMA9'] = ta.trend.ema_indicator(df['close'], window=self.short_window)
+        df['EMA21'] = ta.trend.ema_indicator(df['close'], window=self.long_window)
         df['Signal'] = np.where(df['EMA9'] > df['EMA21'], 1, -1)
         df['Trade_Signal'] = df['Signal'].diff()
         return df
@@ -72,11 +70,7 @@ class RSIStrategy:
         self.oversold = oversold
     
     def apply_strategy(self, df):
-        delta = df['close'].diff(1)
-        gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+        df['RSI'] = ta.momentum.rsi(df['close'], window=self.rsi_period)
         df['Signal'] = np.where(df['RSI'] < self.oversold, 1, np.where(df['RSI'] > self.overbought, -1, 0))
         df['Trade_Signal'] = df['Signal'].diff()
         return df
@@ -87,21 +81,12 @@ class BollingerBandsStrategy:
         self.std_dev = std_dev
 
     def apply_strategy(self, df):
-        df['Middle_Band'] = df['close'].rolling(window=self.window).mean()  
-        df['Upper_Band'] = df['Middle_Band'] + (df['close'].rolling(window=self.window).std() * self.std_dev)
-        df['Lower_Band'] = df['Middle_Band'] - (df['close'].rolling(window=self.window).std() * self.std_dev)
-
-        df['Prev_Close'] = df['close'].shift(1)
-
-        # Fix: Buy when the price touches or goes below the lower band
-        buy_condition = df['close'] <= df['Lower_Band']
-
-        # Fix: Sell when the price is at or above the middle Bollinger Band
-        sell_condition = df['close'] >= df['Middle_Band']
-
-        df['Signal'] = np.where(buy_condition, 1, np.where(sell_condition, -1, 0))
+        bb = ta.volatility.BollingerBands(df['close'], window=self.window, window_dev=self.std_dev)
+        df['Middle_Band'] = bb.bollinger_mavg()
+        df['Upper_Band'] = bb.bollinger_hband()
+        df['Lower_Band'] = bb.bollinger_lband()
+        df['Signal'] = np.where(df['close'] <= df['Lower_Band'], 1, np.where(df['close'] >= df['Middle_Band'], -1, 0))
         df['Trade_Signal'] = df['Signal'].diff()
-
         return df
 
 class EMACrossoverRSIStrategy:
@@ -111,15 +96,9 @@ class EMACrossoverRSIStrategy:
         self.rsi_period = rsi_period
 
     def apply_strategy(self, df):
-        df['EMA_Short'] = df['close'].ewm(span=self.short_window, adjust=False).mean()
-        df['EMA_Long'] = df['close'].ewm(span=self.long_window, adjust=False).mean()
-        
-        delta = df['close'].diff(1)
-        gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-
+        df['EMA_Short'] = ta.trend.ema_indicator(df['close'], window=self.short_window)
+        df['EMA_Long'] = ta.trend.ema_indicator(df['close'], window=self.long_window)
+        df['RSI'] = ta.momentum.rsi(df['close'], window=self.rsi_period)
         df['Signal'] = np.where((df['EMA_Short'] > df['EMA_Long']) & (df['RSI'] > 50), 1, 
                                 np.where((df['EMA_Short'] < df['EMA_Long']) & (df['RSI'] < 50), -1, 0))
         df['Trade_Signal'] = df['Signal'].diff()
@@ -134,18 +113,13 @@ class BollingerBandsRSIStrategy:
         self.rsi_overbought = rsi_overbought
 
     def apply_strategy(self, df):
-        df['Middle_Band'] = df['close'].rolling(window=self.window).mean()
-        df['Upper_Band'] = df['Middle_Band'] + (df['close'].rolling(window=self.window).std() * self.std_dev)
-        df['Lower_Band'] = df['Middle_Band'] - (df['close'].rolling(window=self.window).std() * self.std_dev)
-        
-        delta = df['close'].diff(1)
-        gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-        
+        bb = ta.volatility.BollingerBands(df['close'], window=self.window, window_dev=self.std_dev)
+        df['Middle_Band'] = bb.bollinger_mavg()
+        df['Upper_Band'] = bb.bollinger_hband()
+        df['Lower_Band'] = bb.bollinger_lband()
+        df['RSI'] = ta.momentum.rsi(df['close'], window=self.rsi_period)
         df['Signal'] = np.where((df['close'] <= df['Lower_Band']) & (df['RSI'] < self.rsi_oversold), 1, 
-                                np.where((df['close'] >= df['Middle_Band']), -1, 0))
+                                np.where(df['close'] >= df['Middle_Band'], -1, 0))
         df['Trade_Signal'] = df['Signal'].diff()
         return df
 
@@ -156,14 +130,8 @@ class DonchianBreakoutStrategy:
     def apply_strategy(self, df):
         df['Upper_Channel'] = df['high'].rolling(window=self.window).max()
         df['Lower_Channel'] = df['low'].rolling(window=self.window).min()
-        df['Middle_Channel'] = (df['Upper_Channel'] + df['Lower_Channel']) / 2
-        
-        df['Prev_Close'] = df['close'].shift(1)
-        df['Prev_Volume'] = df['volume'].shift(1)
-        avg_volume = df['volume'].rolling(window=self.window).mean()
-
-        df['Signal'] = np.where((df['Prev_Close'] < df['Upper_Channel']) & (df['close'] > df['Upper_Channel']) & (df['volume'] > avg_volume), 1, 
-                                np.where((df['Prev_Close'] > df['Lower_Channel']) & (df['close'] < df['Lower_Channel']) & (df['volume'] > avg_volume), -1, 0))
+        df['Signal'] = np.where(df['close'] > df['Upper_Channel'], 1, 
+                                np.where(df['close'] < df['Lower_Channel'], -1, 0))
         df['Trade_Signal'] = df['Signal'].diff()
         return df
 
@@ -180,8 +148,8 @@ class TradingBot:
 
     def run_backtest(self, df):
         df = self.strategy.apply_strategy(df)
-        print(f"Initial Balance: ${self.balance:.2f}\n")
-        print(f"Base asset: {self.symbol}\n")
+        print(f"Initial Balance: ${self.balance:.2f}")
+        print(f"Base asset: {self.base_asset}\n")
 
         for i in range(1, len(df)):
             price = df['close'].iloc[i]
@@ -215,8 +183,9 @@ class TradingBot:
 
 
 if __name__ == "__main__":
-    fetcher = BinanceDataFetcher(symbol="ETHUSDT", days=365)
+    pair = "BTCUSDT"
+    fetcher = BinanceDataFetcher(symbol=pair, days=365)
     df = fetcher.fetch_data()
-    strategy = EMACrossoverStrategy()
-    bot = TradingBot(strategy, symbol="ETHUSDT")
+    strategy = RSIStrategy()
+    bot = TradingBot(strategy, symbol=pair)
     bot.run_backtest(df)
