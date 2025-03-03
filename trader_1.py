@@ -4,9 +4,11 @@ import requests
 import numpy as np
 import time
 import ta
+from datetime import datetime, timezone
+import talib 
 
 class BinanceDataFetcher:
-    def __init__(self, symbol="BTCUSDT", interval="1d", days=365, filename="historical_data.csv"):
+    def __init__(self, symbol="BTCUSDT", interval="1h", days=365, filename="historical_data.csv"):
         self.base_url = "https://api.binance.com/api/v3/klines"
         self.symbol = symbol
         self.interval = interval
@@ -71,7 +73,7 @@ class RSIStrategy:
     
     def apply_strategy(self, df):
         df['RSI'] = ta.momentum.rsi(df['close'], window=self.rsi_period)
-        df['Signal'] = np.where(df['RSI'] < self.oversold, 1, np.where(df['RSI'] > self.overbought, -1, 0))
+        df['Signal'] = np.where(df['RSI'] < self.oversold, 2, np.where(df['RSI'] > self.overbought, -2, 0))
         df['Trade_Signal'] = df['Signal'].diff()
         return df
 
@@ -135,6 +137,46 @@ class DonchianBreakoutStrategy:
         df['Trade_Signal'] = df['Signal'].diff()
         return df
 
+class SupertrendStrategy:
+    def __init__(self, period=10, multiplier=3):
+        self.period = period
+        self.multiplier = multiplier
+
+    def calculate_supertrend(self, df):
+        """Computes the Supertrend indicator using TA-Lib for ATR."""
+        df['atr'] = talib.ATR(df['high'], df['low'], df['close'], timeperiod=self.period)
+
+        hl = (df['high'] + df['low']) / 2
+        df['upper_band'] = hl + (self.multiplier * df['atr'])
+        df['lower_band'] = hl - (self.multiplier * df['atr'])
+
+        df['supertrend'] = np.nan
+        trend = True  # Start as bullish
+
+        for i in range(1, len(df)):
+            if trend and df['close'].iloc[i] < df['upper_band'].iloc[i - 1]:
+                trend = False
+            elif not trend and df['close'].iloc[i] > df['lower_band'].iloc[i - 1]:
+                trend = True
+
+            df.at[i, 'supertrend'] = df['lower_band'].iloc[i] if trend else df['upper_band'].iloc[i]
+
+        return df
+
+    def apply_strategy(self, df):
+        """Generates Buy/Sell signals based on the Supertrend crossover."""
+        df = self.calculate_supertrend(df)
+        df['Trade_Signal'] = 0
+
+        for i in range(1, len(df)):
+            if df['close'].iloc[i - 1] < df['supertrend'].iloc[i - 1] and df['close'].iloc[i] > df['supertrend'].iloc[i]:
+                df.at[i, 'Trade_Signal'] = 2  # Buy signal
+            elif df['close'].iloc[i - 1] > df['supertrend'].iloc[i - 1] and df['close'].iloc[i] < df['supertrend'].iloc[i]:
+                df.at[i, 'Trade_Signal'] = -2  # Sell signal
+
+        return df
+
+
 class TradingBot:
     def __init__(self, strategy, symbol="BTCUSDT", initial_balance=1000):
         self.strategy = strategy
@@ -155,24 +197,27 @@ class TradingBot:
         for i in range(1, len(df)):
             price = df['close'].iloc[i]
             
-            if df['Trade_Signal'].iloc[i] == 1 and self.first_trade:  # First trade must be a BUY
+            timestamp = df['timestamp'].iloc[i]
+            trade_time = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).strftime('%d-%m-%Y %H:%M:%S UTC')
+
+            if df['Trade_Signal'].iloc[i] == 2 and self.first_trade:  # First trade must be a BUY
                 self.position = self.balance / price  # Buy all with available balance
                 self.balance = 0
                 self.first_trade = False
                 self.trades += 1
                 self.buy_price = price  # Store buy price
-                print(f"BUY at {price:.2f}, Amount: {self.position:.6f} {self.base_asset}")
+                print(f"BUY at {price:.2f} on {trade_time}, Amount: {self.position:.6f} {self.base_asset}")
 
-            elif df['Trade_Signal'].iloc[i] == 1 and self.balance > 0:  # Buy only if we have cash
+            elif df['Trade_Signal'].iloc[i] == 2 and self.balance > 0:  # Buy only if we have cash
                 self.position = self.balance / price
                 self.balance = 0
                 self.trades += 1
                 self.buy_price = price  # Store buy price
-                print(f"BUY at {price:.2f}, Amount: {self.position:.6f} {self.base_asset}")
+                print(f"BUY at {price:.2f} on {trade_time}, Amount: {self.position:.6f} {self.base_asset}")
 
-            elif df['Trade_Signal'].iloc[i] == -1 and self.position > 0 and price > self.buy_price:  # Sell only if we hold crypto
+            elif df['Trade_Signal'].iloc[i] == -2 and self.position > 0 and price > self.buy_price:  # Sell only if we hold crypto
                 self.balance = self.position * price
-                print(f"SELL at {price:.2f}, Amount: {self.position:.6f} {self.base_asset}, Balance: {self.balance}")
+                print(f"SELL at {price:.2f} on {trade_time}, Amount: {self.position:.6f} {self.base_asset}, Balance: {self.balance}")
                 self.position = 0
                 self.trades += 1
 
@@ -183,11 +228,10 @@ class TradingBot:
         return final_balance
 
 
-
 if __name__ == "__main__":
     pair = "BTCUSDT"
-    fetcher = BinanceDataFetcher(symbol=pair, days=365)
+    fetcher = BinanceDataFetcher(symbol=pair, days=380)
     df = fetcher.fetch_data()
-    strategy = EMACrossoverStrategy()
+    strategy = SupertrendStrategy()
     bot = TradingBot(strategy, symbol=pair)
     bot.run_backtest(df)
